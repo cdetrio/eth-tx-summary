@@ -55,12 +55,38 @@ function createVmTraceStream(provider, txHash){
         type: 'tx',
         data: txData,
       })
-      query.getBlockByHash(txData.blockHash, function(err, _blockData){
+      var queryBlockMethod = 'getBlockByHash'
+      var query_block_param = txData.blockHash
+      if (txData.blockHash === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+        // tx is pending
+        queryBlockMethod = 'getBlockByNumber'
+        query_block_param = "pending"
+      }
+      //query.getBlockByHash(txData.blockHash, function(err, _blockData){
+      query[queryBlockMethod](query_block_param, function(err, _blockData){
         if (err) return cb(err)
         blockData = _blockData
+        // pending block returned by getBlockByNumber has null for miner
+        if (blockData.miner === null) {
+          blockData.miner = "0x0000000000000000000000000000000000000000"
+        }
         // materialize block and tx's
         targetBlock = materializeBlocks(blockData)
-        var txIndex = parseInt(txData.transactionIndex, 16)
+
+        // pending tx returned by getTransactionByHash has null for transactionIndex
+        //var txIndex = parseInt(txData.transactionIndex, 16)
+
+        var block_tx_hashes = targetBlock.transactions.map(function(tx) {
+          return '0x' + tx.hash().toString('hex')
+        })
+        var findHash = function(hash) { return hash === txHash }
+        var txIndex = block_tx_hashes.findIndex(findHash)
+        if (txIndex === -1) {
+          // TODO: deal with case when pending tx was mined before fetch of pending block
+          // also occcurs due to geth bug https://github.com/ethereum/go-ethereum/issues/2897
+          return cb('error: tx not found in pending block.')
+        }
+
         targetTx = targetBlock.transactions[txIndex]
         // determine prepatory tx's
         prepatoryTxs = targetBlock.transactions.slice(0, txIndex)
@@ -74,7 +100,7 @@ function createVmTraceStream(provider, txHash){
       })
     })
   }
-  
+
   // we need to run all the txs to setup the state
   function runPrepatoryTxs(cb){
     async.eachSeries(prepatoryTxs, function(prepTx, cb){
